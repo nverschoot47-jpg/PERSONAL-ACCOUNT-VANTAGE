@@ -1,0 +1,40 @@
+# ================================================================
+# PRONTO-AI v2.1.0 — Environment Variables
+# Copy this file to .env for local dev (never commit .env)
+# On Railway: set these under "Variables" in your service
+# ================================================================
+
+# ── Database ──────────────────────────────────────────────────────
+# PostgreSQL connection string (provided by Railway)
+DATABASE_URL=postgresql://user:password@host:5432/dbname
+
+# ── MetaAPI ───────────────────────────────────────────────────────
+# Your MetaAPI auth token (from metaapi.cloud dashboard)
+META_API_TOKEN=your_metaapi_token_here
+
+# The MetaAPI account ID for THIS deployment's broker account
+META_ACCOUNT=your_metaapi_account_id_here
+
+# ── Broker ────────────────────────────────────────────────────────
+# Which broker this Railway service is connected to.
+# This controls which MT5 symbol names are used for orders.
+#
+#   BROKER=ftmo     → XAUUSD       / US100.cash   (default)
+#   BROKER=vantage  → XAUUSD+      / NAS100
+#   BROKER=maven    → XAUUSD       / US100
+#
+# Each broker needs its OWN Railway service with its own META_ACCOUNT.
+BROKER=ftmo
+
+# ── Webhook security ──────────────────────────────────────────────
+# Secret token that TradingView sends in the X-Webhook-Secret header.
+# Use the SAME secret in all three Railway services —
+# TradingView sends the same webhook to all three URLs.
+WEBHOOK_SECRET=your_secret_here
+
+# ── Optional ─────────────────────────────────────────────────────
+# PORT is set automatically by Railway — don't set this manually.
+# PORT=3000
+
+# MetaAPI base URL — only change if using a regional endpoint.
+# META_BASE=https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai
