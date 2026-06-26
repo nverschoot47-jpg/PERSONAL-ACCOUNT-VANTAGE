@@ -12,7 +12,7 @@
 const TIMEZONE = "Europe/Brussels";
 
 // Risk: 0.0375% of equity per trade
-const DEFAULT_RISK_PCT = 0.000375;
+const DEFAULT_RISK_PCT = 0.1;
 
 // SL buffer: webhook gives sl_pct (e.g. 0.003 = 0.3%)
 // We multiply by 1.5 to account for spread + timing lag
