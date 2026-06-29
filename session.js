@@ -1,6 +1,6 @@
 "use strict";
 // ================================================================
-// session.js  v2.1.0  |  PRONTO-AI
+// session.js  v2.1.1  |  PRONTO-AI
 // Only XAUUSD and US100/NAS100 — all other symbols blocked
 //
 // Supported brokers (set env var BROKER):
@@ -11,7 +11,7 @@
 
 const TIMEZONE = "Europe/Brussels";
 
-// Risk: 0.0375% of equity per trade 
+// Risk: per trade as fraction of equity
 const DEFAULT_RISK_PCT = 0.005;
 
 // SL buffer: webhook gives sl_pct (e.g. 0.003 = 0.3%)
@@ -19,24 +19,23 @@ const DEFAULT_RISK_PCT = 0.005;
 const SL_BUFFER_MULT = 1.5;
 
 // ── Broker detection ─────────────────────────────────────────────
-// Set BROKER env var to "ftmo" | "vantage" | "maven"
-// Defaults to "ftmo" if not set.
 const BROKER = (process.env.BROKER || "ftmo").toLowerCase().trim();
 
-// Per-broker MT5 symbol names
-// catalog key → { type, mt5, pip }
+// Per-broker MT5 symbol names + volume constraints
+// volMin  = minimum lot size allowed by broker
+// volStep = lot size must be a multiple of this value
 const BROKER_SYMBOL_MAP = {
   ftmo: {
-    "XAUUSD":     { type: "commodity", mt5: "XAUUSD",     pip: 0.01 },
-    "US100.cash": { type: "index",     mt5: "US100.cash", pip: 0.10 },
+    "XAUUSD":     { type: "commodity", mt5: "XAUUSD",     pip: 0.01, volMin: 0.01, volStep: 0.01 },
+    "US100.cash": { type: "index",     mt5: "US100.cash", pip: 0.10, volMin: 0.01, volStep: 0.01 },
   },
   vantage: {
-    "XAUUSD":     { type: "commodity", mt5: "XAUUSD+",    pip: 0.01 },
-    "US100.cash": { type: "index",     mt5: "NAS100",     pip: 0.10 },
+    "XAUUSD":     { type: "commodity", mt5: "XAUUSD+",    pip: 0.01, volMin: 0.01, volStep: 0.01 },
+    "US100.cash": { type: "index",     mt5: "NAS100",     pip: 0.10, volMin: 0.10, volStep: 0.10 },
   },
   maven: {
-    "XAUUSD":     { type: "commodity", mt5: "XAUUSD",     pip: 0.01 },
-    "US100.cash": { type: "index",     mt5: "US100",      pip: 0.10 },
+    "XAUUSD":     { type: "commodity", mt5: "XAUUSD",     pip: 0.01, volMin: 0.01, volStep: 0.01 },
+    "US100.cash": { type: "index",     mt5: "US100",      pip: 0.10, volMin: 0.01, volStep: 0.01 },
   },
 };
 
@@ -48,6 +47,18 @@ if (!BROKER_SYMBOL_MAP[BROKER]) {
 const SYMBOL_CATALOG = BROKER_SYMBOL_MAP[BROKER];
 
 console.log(`[session.js] Broker="${BROKER}" — MT5 symbols: XAUUSD→"${SYMBOL_CATALOG["XAUUSD"].mt5}", US100→"${SYMBOL_CATALOG["US100.cash"].mt5}"`);
+
+// ── Volume rounding helper ────────────────────────────────────────
+// Rounds lots DOWN to nearest volStep, then enforces volMin
+function roundLots(rawLots, symInfo) {
+  const step = symInfo.volStep ?? 0.01;
+  const min  = symInfo.volMin  ?? 0.01;
+  // Round DOWN to nearest step (never risk more than calculated)
+  const stepped = Math.floor(rawLots / step) * step;
+  // Enforce minimum
+  const result = Math.max(min, parseFloat(stepped.toFixed(2)));
+  return result;
+}
 
 // All TradingView aliases that map to our 2 pairs
 const SYMBOL_ALIASES = {
@@ -90,10 +101,6 @@ function getBrusselsDateStr(date = null) {
   return new Intl.DateTimeFormat("sv-SE", { timeZone: TIMEZONE }).format(d);
 }
 
-// Session based on Brussels time
-// Asia:   02:00–08:00
-// London: 08:00–15:30
-// NY:     15:30–02:00
 function getSession(date = null) {
   const { hhmm } = getBrusselsComponents(date);
   if (hhmm >= 200  && hhmm < 800)  return "asia";
@@ -106,12 +113,10 @@ function isWeekend(date = null) {
   return day === 0 || day === 6;
 }
 
-// Normalize raw symbol from TradingView to our catalog key
 function normalizeSymbol(raw) {
   if (!raw) return null;
   const upper = raw.toString().toUpperCase().trim().replace(/[^A-Z0-9./]/g, "");
   if (SYMBOL_ALIASES[upper]) return SYMBOL_ALIASES[upper];
-  // Also try without dot
   const noDot = upper.replace(/\./g, "");
   for (const [alias, target] of Object.entries(SYMBOL_ALIASES)) {
     if (alias.replace(/[./]/g, "") === noDot) return target;
@@ -130,12 +135,10 @@ function getVwapPosition(price, vwapMid) {
   return parseFloat(price) >= parseFloat(vwapMid) ? "above" : "below";
 }
 
-// Optimizer key: "XAUUSD_london_buy_above"
 function buildOptimizerKey(symbol, session, direction, vwapPos) {
   return `${symbol}_${session}_${direction}_${vwapPos}`;
 }
 
-// Daily trade label: "01/06-#3"
 function buildDailyLabel(date, count) {
   const s = getBrusselsDateStr(date);
   const dd = s.slice(8, 10);
@@ -143,8 +146,6 @@ function buildDailyLabel(date, count) {
   return `${dd}/${mm}-#${count}`;
 }
 
-// canOpen: only blocked on weekends or unknown symbol
-// Also explicitly block index signals we don't trade
 const BLOCKED_SYMBOLS = new Set([
   "US30USD","US30","DOW","DJI","DJIA",
   "DE30EUR","DE30","DAX","GER30","GER40",
@@ -153,15 +154,11 @@ const BLOCKED_SYMBOLS = new Set([
   "JP225","JPN225","NIKKEI",
 ]);
 
-// Time-based block windows (Brussels wall-clock, hhmm format, end-exclusive)
-// XAUUSD     blocked 14:00–15:00
-// US100.cash blocked 11:00–14:00
 const TIME_BLOCK_WINDOWS = {
   "XAUUSD":     [{ start: 1400, end: 1500 }],
   "US100.cash": [{ start: 1100, end: 1400 }],
 };
 
-// Returns the matching window if the symbol is time-blocked right now, else null
 function isTimeBlocked(symbolKey, date = null) {
   const windows = TIME_BLOCK_WINDOWS[symbolKey];
   if (!windows) return null;
@@ -177,10 +174,6 @@ function _fmtHHMM(n) {
   return s.slice(0, 2) + ":" + s.slice(2);
 }
 
-// TP risk-reward per symbol per Brussels time window (end-exclusive).
-// Anything not matched uses DEFAULT_TP_RR.
-//   XAUUSD     09:00-11:00 -> 1.0 RR ,  15:00-17:00 -> 3.0 RR
-//   US100.cash 08:00-10:00 -> 2.0 RR
 const DEFAULT_TP_RR = 1.5;
 const TP_RR_WINDOWS = {
   "XAUUSD": [
@@ -192,7 +185,6 @@ const TP_RR_WINDOWS = {
   ],
 };
 
-// Resolve the TP RR for a symbol at a given time (defaults to DEFAULT_TP_RR)
 function getTpRR(symbolKey, date = null) {
   const windows = TP_RR_WINDOWS[symbolKey];
   if (windows) {
@@ -226,4 +218,5 @@ module.exports = {
   buildDailyLabel, canOpenNewTrade,
   TIME_BLOCK_WINDOWS, isTimeBlocked,
   DEFAULT_TP_RR, TP_RR_WINDOWS, getTpRR,
+  roundLots,
 };
