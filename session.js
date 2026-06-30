@@ -5,14 +5,15 @@
 //
 // Supported brokers (set env var BROKER):
 //   ftmo    → XAUUSD       / US100.cash   (default)
-//   vantage → XAUUSD+      / NAS100
+//   vantage → XAUUSD       / NAS100
 //   maven   → XAUUSD       / US100
 // ================================================================
 
 const TIMEZONE = "Europe/Brussels";
 
 // Risk: per trade as fraction of equity
-const DEFAULT_RISK_PCT = 0.005;
+// 0.09 = 9% → ≈€18 risk at €200 equity, scales with balance
+const DEFAULT_RISK_PCT = 0.09;
 
 // SL buffer: webhook gives sl_pct (e.g. 0.003 = 0.3%)
 // We multiply by 1.5 to account for spread + timing lag
@@ -30,7 +31,7 @@ const BROKER_SYMBOL_MAP = {
     "US100.cash": { type: "index",     mt5: "US100.cash", pip: 0.10, volMin: 0.01, volStep: 0.01 },
   },
   vantage: {
-    "XAUUSD":     { type: "commodity", mt5: "XAUUSD+",    pip: 0.01, volMin: 0.01, volStep: 0.01 },
+    "XAUUSD":     { type: "commodity", mt5: "XAUUSD",     pip: 0.01, volMin: 0.01, volStep: 0.01 },
     "US100.cash": { type: "index",     mt5: "NAS100",     pip: 0.10, volMin: 0.10, volStep: 0.10 },
   },
   maven: {
@@ -49,15 +50,23 @@ const SYMBOL_CATALOG = BROKER_SYMBOL_MAP[BROKER];
 console.log(`[session.js] Broker="${BROKER}" — MT5 symbols: XAUUSD→"${SYMBOL_CATALOG["XAUUSD"].mt5}", US100→"${SYMBOL_CATALOG["US100.cash"].mt5}"`);
 
 // ── Volume rounding helper ────────────────────────────────────────
-// Rounds lots DOWN to nearest volStep, then enforces volMin
+// Rounds lots DOWN to nearest volStep, then enforces volMin.
+// Decimal precision is derived from volStep itself, so a 0.10 step
+// (e.g. Vantage NAS100) always yields exactly 1 decimal (0.10, 0.20, 0.30...)
+// instead of leaking floating-point noise like 0.30000000000000004.
 function roundLots(rawLots, symInfo) {
   const step = symInfo.volStep ?? 0.01;
   const min  = symInfo.volMin  ?? 0.01;
-  // Round DOWN to nearest step (never risk more than calculated)
-  const stepped = Math.floor(rawLots / step) * step;
-  // Enforce minimum
-  const result = Math.max(min, parseFloat(stepped.toFixed(2)));
-  return result;
+  // Decimals implied by the step itself (0.10 → 1, 0.01 → 2)
+  const stepStr = step.toString();
+  const decimals = stepStr.includes(".") ? stepStr.split(".")[1].length : 0;
+  // Round DOWN to nearest step (never risk more than calculated),
+  // using integer math to avoid floating-point drift
+  const stepsCount = Math.floor(rawLots / step + 1e-9); // tiny epsilon guards against e.g. 0.299999999
+  const stepped = parseFloat((stepsCount * step).toFixed(decimals));
+  // Enforce minimum, keep the step's own precision (not hardcoded to 2dp)
+  const result = Math.max(min, stepped);
+  return parseFloat(result.toFixed(decimals));
 }
 
 // All TradingView aliases that map to our 2 pairs
