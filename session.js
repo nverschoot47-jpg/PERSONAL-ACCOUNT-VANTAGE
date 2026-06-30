@@ -181,7 +181,6 @@ const BLOCKED_SYMBOLS = new Set([
 ]);
 
 const TIME_BLOCK_WINDOWS = {
-  "XAUUSD":     [{ start: 800,  end: 1300 }],
   "US100.cash": [{ start: 1100, end: 1600 }],
 };
 
