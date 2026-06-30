@@ -27,6 +27,26 @@ const pool = DB_ENABLED
 
 if (pool) pool.on("error", (err) => console.error("[DB Pool] error:", err.message));
 
+// Runs a "best effort" statement inside its own SAVEPOINT, so that if it
+// fails, only that statement is rolled back — the surrounding transaction
+// stays healthy and every later query keeps working. A plain .catch(()=>{})
+// around client.query() is NOT enough: Postgres still marks the whole
+// transaction as aborted on error, and .catch() only hides the JS-side
+// rejection while every subsequent query keeps failing with
+// "current transaction is aborted, commands ignored until end of
+// transaction block". This helper actually clears that state.
+async function safeRun(client, sql, label) {
+  await client.query("SAVEPOINT sp_safe_run");
+  try {
+    await client.query(sql);
+    await client.query("RELEASE SAVEPOINT sp_safe_run");
+  } catch (e) {
+    await client.query("ROLLBACK TO SAVEPOINT sp_safe_run");
+    await client.query("RELEASE SAVEPOINT sp_safe_run");
+    console.warn(`[DB] safeRun skipped (${label}): ${e.message}`);
+  }
+}
+
 // ── initDB ────────────────────────────────────────────────────────
 async function initDB() {
   if (!DB_ENABLED) {
@@ -282,11 +302,11 @@ async function initDB() {
     `);
 
     // Fix: drop phantom_sl_hit NOT NULL (no-op if already nullable/default)
-    await client.query(`ALTER TABLE ghost_trades ALTER COLUMN phantom_sl_hit DROP NOT NULL`).catch(()=>{});
+    await safeRun(client, `ALTER TABLE ghost_trades ALTER COLUMN phantom_sl_hit DROP NOT NULL`, "drop phantom_sl_hit NOT NULL");
     // Fix: tp nullable in ghost_state
-    await client.query(`ALTER TABLE ghost_state ALTER COLUMN tp DROP NOT NULL`).catch(()=>{});
+    await safeRun(client, `ALTER TABLE ghost_state ALTER COLUMN tp DROP NOT NULL`, "drop ghost_state.tp NOT NULL");
     // Fix: UNIQUE constraint on ghost_trades.position_id (required for ON CONFLICT)
-    await client.query(`
+    await safeRun(client, `
       DO $d$ BEGIN
         IF NOT EXISTS (
           SELECT 1 FROM pg_constraint c
@@ -297,11 +317,11 @@ async function initDB() {
           ALTER TABLE ghost_trades ADD CONSTRAINT ghost_trades_position_id_key UNIQUE (position_id);
         END IF;
       END $d$
-    `).catch(()=>{});
+    `, "add ghost_trades.position_id UNIQUE constraint");
 
     // Data recovery: copy closed_trades → ghost_trades on every startup
     // Ensures FINISHED data survives every redeploy forever
-    await client.query(`
+    await safeRun(client, `
       INSERT INTO ghost_trades (
         position_id, daily_label, optimizer_key, symbol, asset_type,
         direction, session, vwap_position,
@@ -330,7 +350,7 @@ async function initDB() {
         AND NOT EXISTS (
           SELECT 1 FROM ghost_trades gt WHERE gt.position_id = ct.position_id
         )
-    `).catch(()=>{});
+    `, "copy closed_trades into ghost_trades");
     console.log("[DB] Migrations applied + data recovery done");
 
     // ── Step 3: Indexes (now safe — columns exist) ─────────────────
