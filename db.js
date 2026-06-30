@@ -281,8 +281,8 @@ async function initDB() {
       ALTER TABLE ghost_trades   ADD COLUMN IF NOT EXISTS mt5_close_reason TEXT;
     `);
 
-    // Fix: drop phantom_sl NOT NULL
-    await client.query(`ALTER TABLE ghost_trades ALTER COLUMN phantom_sl DROP NOT NULL`).catch(()=>{});
+    // Fix: drop phantom_sl_hit NOT NULL (no-op if already nullable/default)
+    await client.query(`ALTER TABLE ghost_trades ALTER COLUMN phantom_sl_hit DROP NOT NULL`).catch(()=>{});
     // Fix: tp nullable in ghost_state
     await client.query(`ALTER TABLE ghost_state ALTER COLUMN tp DROP NOT NULL`).catch(()=>{});
     // Fix: UNIQUE constraint on ghost_trades.position_id (required for ON CONFLICT)
