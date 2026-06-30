@@ -19,6 +19,14 @@ const DEFAULT_RISK_PCT = 0.09;
 // We multiply by 1.5 to account for spread + timing lag
 const SL_BUFFER_MULT = 1.5;
 
+// Per-symbol lot size multiplier — applied AFTER rounding to volStep
+// (i.e. round normally, then scale the result). Gold stays at normal
+// size; US100/NAS100 gets doubled.
+const LOT_MULTIPLIER = {
+  "XAUUSD":     1,
+  "US100.cash": 2,
+};
+
 // ── Broker detection ─────────────────────────────────────────────
 const BROKER = (process.env.BROKER || "ftmo").toLowerCase().trim();
 
@@ -65,7 +73,16 @@ function roundLots(rawLots, symInfo) {
   const stepsCount = Math.floor(rawLots / step + 1e-9); // tiny epsilon guards against e.g. 0.299999999
   const stepped = parseFloat((stepsCount * step).toFixed(decimals));
   // Enforce minimum, keep the step's own precision (not hardcoded to 2dp)
-  const result = Math.max(min, stepped);
+  let result = Math.max(min, stepped);
+
+  // Apply per-symbol lot multiplier AFTER rounding (gold x1, NAS/US100 x2).
+  // symInfo.key is set by getSymbolInfo(); falls back to no multiplier
+  // (x1) if key is missing, e.g. when callers pass a raw symInfo object.
+  const mult = LOT_MULTIPLIER[symInfo.key] ?? 1;
+  if (mult !== 1) {
+    result = parseFloat((result * mult).toFixed(decimals));
+  }
+
   return parseFloat(result.toFixed(decimals));
 }
 
@@ -164,8 +181,8 @@ const BLOCKED_SYMBOLS = new Set([
 ]);
 
 const TIME_BLOCK_WINDOWS = {
-  "XAUUSD":     [{ start: 1400, end: 1500 }],
-  "US100.cash": [{ start: 1100, end: 1400 }],
+  "XAUUSD":     [{ start: 800,  end: 1300 }],
+  "US100.cash": [{ start: 1100, end: 1600 }],
 };
 
 function isTimeBlocked(symbolKey, date = null) {
@@ -186,11 +203,15 @@ function _fmtHHMM(n) {
 const DEFAULT_TP_RR = 1.5;
 const TP_RR_WINDOWS = {
   "XAUUSD": [
-    { start: 900,  end: 1100, rr: 1.0 },
+    { start: 1300, end: 1500, rr: 1.25 },
     { start: 1500, end: 1700, rr: 3.0 },
+    // 17:00–08:00 (rest) falls through to DEFAULT_TP_RR (1.5R)
   ],
   "US100.cash": [
-    { start: 800,  end: 1000, rr: 2.0 },
+    { start: 800,  end: 1100, rr: 2.25 },
+    { start: 1600, end: 1800, rr: 1.25 },
+    { start: 1800, end: 2300, rr: 2.75 },
+    // 23:00–08:00 (rest) falls through to DEFAULT_TP_RR (1.5R)
   ],
 };
 
@@ -227,5 +248,5 @@ module.exports = {
   buildDailyLabel, canOpenNewTrade,
   TIME_BLOCK_WINDOWS, isTimeBlocked,
   DEFAULT_TP_RR, TP_RR_WINDOWS, getTpRR,
-  roundLots,
+  roundLots, LOT_MULTIPLIER,
 };
