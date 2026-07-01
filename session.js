@@ -24,7 +24,7 @@ const SL_BUFFER_MULT = 1.5;
 // size; US100/NAS100 gets doubled.
 const LOT_MULTIPLIER = {
   "XAUUSD":     1,
-  "US100.cash": 2,
+  "US100.cash": 1.6,
 };
 
 // ── Broker detection ─────────────────────────────────────────────
